@@ -86,6 +86,9 @@ main() {
 
     # 复制所有必要文件
     cp -r "$SCRIPT_DIR"/* "$SKILL_DIR/"
+    if [ -f "$SCRIPT_DIR/.env.example" ]; then
+        cp "$SCRIPT_DIR/.env.example" "$SKILL_DIR/.env.example"
+    fi
 
     # 排除不需要的文件
     if [ -d "$SKILL_DIR/.git" ]; then
@@ -127,22 +130,44 @@ main() {
     print_info "安装 Python 依赖..."
     cd "$SKILL_DIR"
 
-    # 尝试使用 pip3，如果不存在则使用 pip
-    if command_exists pip3; then
-        pip3 install -q yt-dlp pysrt python-dotenv
-    else
-        pip install -q yt-dlp pysrt python-dotenv
+    VENV_DIR="$SKILL_DIR/.venv"
+    VENV_OK=false
+
+    # 优先使用虚拟环境，避免 PEP 668 限制
+    if command_exists python3; then
+        print_info "创建虚拟环境: $VENV_DIR"
+        if python3 -m venv "$VENV_DIR" >/dev/null 2>&1; then
+            if [ -f "$VENV_DIR/bin/pip" ]; then
+                "$VENV_DIR/bin/pip" install -q -U pip || true
+                "$VENV_DIR/bin/pip" install -q yt-dlp pysrt python-dotenv || VENV_OK=false
+                VENV_OK=true
+            fi
+        fi
     fi
 
-    print_success "Python 依赖安装完成（yt-dlp、pysrt、python-dotenv）"
+    if [ "$VENV_OK" = true ]; then
+        print_success "Python 依赖已安装到 .venv（yt-dlp、pysrt、python-dotenv）"
+    else
+        # 回退到系统 pip（可能触发 PEP 668）
+        print_warning "虚拟环境安装失败，尝试使用系统 pip（可能会被 PEP 668 阻止）"
+        if command_exists pip3; then
+            pip3 install -q yt-dlp pysrt python-dotenv || true
+        else
+            pip install -q yt-dlp pysrt python-dotenv || true
+        fi
+        print_success "Python 依赖安装尝试完成"
+    fi
 
     # 8. 检查 yt-dlp
     print_info "检查 yt-dlp..."
-    if command_exists yt-dlp; then
+    if [ -f "$VENV_DIR/bin/yt-dlp" ]; then
+        YT_DLP_VERSION=$("$VENV_DIR/bin/yt-dlp" --version)
+        print_success "yt-dlp 已安装（.venv）: $YT_DLP_VERSION"
+    elif command_exists yt-dlp; then
         YT_DLP_VERSION=$(yt-dlp --version)
         print_success "yt-dlp 已安装: $YT_DLP_VERSION"
     else
-        print_warning "yt-dlp 命令行工具未安装"
+        print_warning "yt-dlp 命令行工具未安装（仅影响 CLI 使用）"
         print_info "安装方法:"
         print_info "  macOS:  brew install yt-dlp"
         print_info "  Ubuntu: sudo apt-get install yt-dlp"

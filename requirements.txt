@@ -1,0 +1,13 @@
+# YouTube Clipper Skill - Python Dependencies
+
+# YouTube download
+yt-dlp>=2024.0.0
+
+# Subtitle parsing
+pysrt>=1.1.2
+
+# Environment variable management
+python-dotenv>=1.0.0
+
+# Character encoding detection (used by pysrt)
+chardet>=5.0.0

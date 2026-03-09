@@ -1,11 +1,17 @@
 #!/usr/bin/env python3
 """
 提取字幕片段并转换为 SRT 格式
+修复点：
+1) 保留与片段边界重叠的字幕（避免开头/结尾丢字）
+2) 清理 YouTube VTT 词级时间标签，恢复单词间空格
+3) 过滤极短增量字幕，减少抖动与“看起来不同步”的现象
 """
 
+import html
 import sys
 import re
 from datetime import timedelta
+from typing import List, Dict
 
 def parse_vtt_time(time_str):
     """解析 VTT 时间格式为秒"""
@@ -29,6 +35,66 @@ def format_srt_time(seconds):
     secs = int(td.total_seconds() % 60)
     millis = int((td.total_seconds() % 1) * 1000)
     return f"{hours:02d}:{minutes:02d}:{secs:02d},{millis:03d}"
+
+
+def normalize_vtt_text(text_lines: List[str]) -> str:
+    """将 VTT cue 文本规范化为可读句子。"""
+    text = " ".join(line.strip() for line in text_lines if line.strip())
+    text = html.unescape(text)
+
+    # YouTube 词级标签: <00:11:17.920><c> I</c>
+    text = re.sub(r"<\d{2}:\d{2}:\d{2}\.\d{3}><c>", " ", text)
+    text = text.replace("</c>", " ")
+    text = re.sub(r"</?c[^>]*>", " ", text)
+    text = re.sub(r"<\d{2}:\d{2}:\d{2}\.\d{3}>", " ", text)
+    text = re.sub(r"<[^>]+>", " ", text)
+
+    # 移除说话人标记样式 >> / > >
+    text = text.replace(">>", " ")
+
+    # 标点前空格清理 + 多空格折叠
+    text = re.sub(r"\s+([,.!?;:])", r"\1", text)
+    text = re.sub(r"\s+", " ", text).strip()
+    return text
+
+
+def compact_incremental_cues(subtitles: List[Dict], tiny_threshold: float = 0.12) -> List[Dict]:
+    """
+    去除自动字幕中的极短增量片段（如 10ms 的中间态），保留可读 cue。
+    """
+    if not subtitles:
+        return subtitles
+
+    subtitles = sorted(subtitles, key=lambda x: (x["start"], x["end"]))
+
+    # 先合并完全重复文本的相邻 cue
+    merged: List[Dict] = []
+    for sub in subtitles:
+        if merged:
+            prev = merged[-1]
+            if (
+                sub["text"] == prev["text"]
+                and sub["start"] - prev["end"] <= 0.05
+            ):
+                prev["end"] = max(prev["end"], sub["end"])
+                continue
+        merged.append(sub)
+
+    cleaned: List[Dict] = []
+    for idx, sub in enumerate(merged):
+        dur = sub["end"] - sub["start"]
+        nxt = merged[idx + 1] if idx + 1 < len(merged) else None
+
+        # 极短且与下一条存在“前缀/后缀增量关系”时，判定为中间态字幕，跳过
+        if nxt and dur < tiny_threshold:
+            a = sub["text"]
+            b = nxt["text"]
+            if b.startswith(a) or a.startswith(b):
+                continue
+
+        cleaned.append(sub)
+
+    return cleaned
 
 def extract_subtitle_clip(vtt_file, start_time, end_time, output_file):
     """提取字幕片段"""
@@ -61,8 +127,8 @@ def extract_subtitle_clip(vtt_file, start_time, end_time, output_file):
             sub_start = parse_vtt_time(sub_start_str)
             sub_end = parse_vtt_time(sub_end_str)
 
-            # 检查是否在目标时间范围内
-            if sub_start >= start_seconds and sub_end <= end_seconds:
+            # 检查与目标时间范围是否有重叠（不再只保留“完全包含”）
+            if sub_start < end_seconds and sub_end > start_seconds:
                 # 收集字幕文本
                 i += 1
                 text_lines = []
@@ -70,11 +136,15 @@ def extract_subtitle_clip(vtt_file, start_time, end_time, output_file):
                     text_lines.append(lines[i].strip())
                     i += 1
 
-                text = ' '.join(text_lines)
+                text = normalize_vtt_text(text_lines)
+                if not text:
+                    continue
 
-                # 调整时间戳（减去起始时间）
-                adjusted_start = sub_start - start_seconds
-                adjusted_end = sub_end - start_seconds
+                # 调整时间戳并裁剪到片段边界
+                adjusted_start = max(0.0, sub_start - start_seconds)
+                adjusted_end = min(end_seconds - start_seconds, sub_end - start_seconds)
+                if adjusted_end <= adjusted_start:
+                    continue
 
                 subtitles.append({
                     'start': adjusted_start,
@@ -83,6 +153,8 @@ def extract_subtitle_clip(vtt_file, start_time, end_time, output_file):
                 })
 
         i += 1
+
+    subtitles = compact_incremental_cues(subtitles)
 
     print(f"   找到 {len(subtitles)} 条字幕")
 

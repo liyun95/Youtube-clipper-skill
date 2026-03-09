@@ -5,6 +5,7 @@
 """
 
 import sys
+import os
 import shutil
 import subprocess
 from pathlib import Path
@@ -82,20 +83,38 @@ def clip_video(
     # 创建输出目录
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
-    # 构建 FFmpeg 命令
-    # 使用 -ss 和 -t 进行精确剪辑
-    # -c copy: 直接复制流，不重新编码（快速且无损）
-    cmd = [
-        ffmpeg_path,
-        '-ss', str(start_seconds),  # 起始时间
-        '-i', str(video_path),       # 输入文件
-        '-t', str(duration),         # 持续时间
-        '-c', 'copy',                # 直接复制，不重新编码
-        '-y',                        # 覆盖输出文件
-        str(output_path)
-    ]
+    # 默认使用精确模式（重编码），避免 copy seek 带来的时间基偏移。
+    # 如需旧行为可设置 CLIP_MODE=fast-copy。
+    clip_mode = os.getenv("CLIP_MODE", "accurate").strip().lower()
+    if clip_mode == "fast-copy":
+        cmd = [
+            ffmpeg_path,
+            "-ss", str(start_seconds),
+            "-i", str(video_path),
+            "-t", str(duration),
+            "-c", "copy",
+            "-y",
+            str(output_path)
+        ]
+    else:
+        cmd = [
+            ffmpeg_path,
+            "-i", str(video_path),
+            "-ss", str(start_seconds),
+            "-t", str(duration),
+            "-map", "0:v:0",
+            "-map", "0:a:0?",
+            "-c:v", "libx264",
+            "-preset", "veryfast",
+            "-crf", "18",
+            "-c:a", "aac",
+            "-movflags", "+faststart",
+            "-avoid_negative_ts", "make_zero",
+            "-y",
+            str(output_path)
+        ]
 
-    print(f"   执行 FFmpeg...")
+    print(f"   执行 FFmpeg... (mode={clip_mode})")
 
     # 执行 FFmpeg
     result = subprocess.run(

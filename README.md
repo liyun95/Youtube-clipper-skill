@@ -18,6 +18,7 @@ English | [简体中文](README.zh-CN.md)
 - **Bilingual Subtitles** - Batch translate subtitles to Chinese/English with 95% API call reduction
 - **Subtitle Burning** - Hardcode bilingual subtitles into videos with customizable styling
 - **Content Summarization** - Auto-generate social media content (Xiaohongshu, Douyin, WeChat)
+- **Learning Clip Mode** - Create dual-pass learning clips: masked English first pass + full bilingual second pass + summary card
 
 ---
 
@@ -59,10 +60,19 @@ The install script will:
 
 ### Python Packages
 
-These are automatically installed by the install script:
-- `yt-dlp` - YouTube downloader
-- `pysrt` - SRT subtitle parser
-- `python-dotenv` - Environment variable management
+These are automatically installed by the install script (see [requirements.txt](requirements.txt)):
+
+| Package | Version | Purpose |
+|---------|---------|---------|
+| `yt-dlp` | >=2024.0.0 | YouTube video/subtitle download |
+| `pysrt` | >=1.1.2 | SRT subtitle parsing and manipulation |
+| `python-dotenv` | >=1.0.0 | Environment variable management |
+| `chardet` | >=5.0.0 | Character encoding detection |
+
+Install manually if needed:
+```bash
+pip install -r requirements.txt
+```
 
 ### Important: FFmpeg libass Support
 
@@ -122,6 +132,82 @@ For each clipped chapter:
     └── Chapter_Title_summary.md            # Social media content
 ```
 
+### Learning Clip Mode (5-Segment Structure)
+
+Create a 30-60s learning clip with a structured 5-segment format designed for language learning:
+
+```
+┌─────────┐   ┌─────────┐   ┌────────────┐   ┌─────────────────┐   ┌─────────┐
+│  Intro  │ → │ Masked  │ → │ Transition │ → │ Full + Underline│ → │ Summary │
+│  Card   │   │  Video  │   │    Card    │   │     Video       │   │  Card   │
+│  (4s)   │   │ (30-60s)│   │    (3s)    │   │    (30-60s)     │   │  (4s)   │
+└─────────┘   └─────────┘   └────────────┘   └─────────────────┘   └─────────┘
+```
+
+**Segment Details:**
+1. **Intro Card** - Shows blank placeholders for key expressions, prompts user to listen and fill
+2. **Masked Video** - First pass with key expressions blanked out (`____`)
+3. **Transition Card** - Announces the answer reveal with underlined key expressions
+4. **Full Video** - Second pass with complete bilingual subtitles, key expressions underlined
+5. **Summary Card** - Lists all key expressions with translations
+
+```bash
+python scripts/learning_clip.py video.mp4 video.en.vtt 00:05:00 00:05:45 --output ./youtube-clips --name demo_clip
+```
+
+Output files:
+```
+./youtube-clips/demo_clip/
+├── demo_clip_clip.mp4           # Original clip
+├── demo_clip_clip.srt           # Original subtitles
+├── demo_clip_key_phrases.json   # Extracted key expressions
+├── demo_clip_masked.srt         # Masked subtitles (with ____)
+├── demo_clip_bilingual.srt      # Bilingual subtitles
+├── demo_clip_underlined.ass     # ASS subtitles with underlines
+├── demo_clip_intro.mp4          # Intro guidance card
+├── demo_clip_masked.mp4         # First pass video
+├── demo_clip_transition.mp4     # Transition card
+├── demo_clip_full.mp4           # Second pass video (underlined)
+├── demo_clip_summary.mp4        # Summary card
+└── demo_clip_learning.mp4       # Final concatenated output
+```
+
+**Underline Format (ASS):**
+Key expressions in the second pass are underlined using ASS tags:
+```
+She had a {\u1}black belt{\u0} in small talk.
+```
+
+
+### Codex Workflow (No API)
+
+**Limit:** Semantic analysis is not automated without an API key. Codex can analyze in-chat, but it is a manual step.
+
+**Why Codex asks for a URL or subtitle file:** it needs timestamps to propose 3–5 candidate 30–60s ranges for learning clips.
+
+**Option A: YouTube URL**
+1. Provide the URL and your learning goal (e.g., “listening cloze”).
+2. Codex downloads MP4/VTT.
+3. Codex generates candidate artifacts directly in the run directory:
+   `python scripts/prepare_learning_candidates.py <subtitle.vtt> --output ./youtube-clips --name <base>`
+4. Codex proposes 3–5 ranked 30–60s ranges from `<output>/<base>/<video_id>_candidate_report.md`.
+5. You pick one range (or auto-pick rank #1).
+6. Codex runs:
+   `~/.codex/skills/learning-video-maker/scripts/learning_clip_guided.py <video.mp4> <subtitle.vtt|srt> <start> <end> --output <dir> --name <base>`
+
+**Option B: Local MP4 + VTT**
+1. Provide local `video.mp4` and `subtitle.vtt|srt` paths plus your learning goal.
+2. Codex runs:
+   `python scripts/prepare_learning_candidates.py <subtitle.vtt> --output ./youtube-clips --name <base>`
+3. Codex proposes 3–5 ranked 30–60s ranges from the generated report.
+4. You pick one range (or auto-pick rank #1).
+5. Codex runs the same guided script above.
+
+All candidate artifacts are kept under `<output>/<base>/` (no project-root spill):
+- `<video_id>_analysis.json`
+- `<video_id>_candidates.json`
+- `<video_id>_candidate_report.md`
+
 ---
 
 ## Configuration
@@ -148,6 +234,53 @@ TARGET_LANGUAGE=中文
 
 # Target chapter duration in seconds (180-300 recommended)
 TARGET_CHAPTER_DURATION=180
+```
+
+### Learning Clip Settings
+
+```bash
+# Learning clip duration (seconds)
+LEARNING_CLIP_MIN_SEC=30
+LEARNING_CLIP_MAX_SEC=60
+LEARNING_CLIP_TARGET_SEC=45
+
+# Mask token for cloze subtitles
+MASK_TOKEN=____
+
+# Intro card (guidance before first pass)
+INTRO_DURATION_SEC=4
+INTRO_TITLE_COLOR=#7AD7FF
+INTRO_SUBTITLE_COLOR=#FFFFFF
+INTRO_BLANK_COLOR=#FFD54F
+
+# Transition card (between first and second pass)
+TRANSITION_DURATION_SEC=3
+TRANSITION_TITLE_COLOR=#7AD7FF
+TRANSITION_SUBTITLE_COLOR=#FFFFFF
+
+# Summary card (key expressions list)
+SUMMARY_DURATION_SEC=4
+SUMMARY_TITLE_COLOR=#7AD7FF
+SUMMARY_EN_COLOR=#FFD54F
+SUMMARY_ZH_COLOR=#FFFFFF
+SUMMARY_INCLUDE_TRANSLATION=true
+```
+
+### Subtitle Styling
+
+```bash
+# Font settings
+SUBTITLE_FONT_NAME=PingFang SC
+SUBTITLE_FONT_SIZE=24
+SUBTITLE_MARGIN_V=30
+SUBTITLE_OUTLINE=2
+SUBTITLE_SHADOW=1
+
+# Bilingual subtitle colors
+BILINGUAL_COLOR=true
+BILINGUAL_ORDER=EN_FIRST
+SUBTITLE_EN_COLOR=#FFD54F
+SUBTITLE_ZH_COLOR=#FFFFFF
 ```
 
 For full configuration options, see [.env.example](.env.example).
@@ -186,6 +319,15 @@ Clip this lecture video and create bilingual subtitles: https://youtube.com/watc
 - Generate summary: Yes
 
 **Result**: High-quality clips ready for sharing on social media platforms
+
+### Example 3: Create a dual-pass learning clip (30-60s)
+
+**Input**:
+```
+~/.codex/skills/learning-video-maker/scripts/learning_clip_guided.py video.mp4 video.en.vtt 00:12:10 00:12:55 --name vocab_boost
+```
+
+**Result**: Masked English pass + full bilingual pass + summary card, concatenated into a final video
 
 ---
 

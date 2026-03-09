@@ -11,7 +11,7 @@ allowed-tools:
   - Bash
   - Glob
   - AskUserQuestion
-model: claude-sonnet-4-5-20250514
+model: claude-opus-4-6
 ---
 
 # YouTube 视频智能剪辑工具
@@ -276,6 +276,42 @@ python3 scripts/generate_summary.py <chapter_info>
 4. 询问是否继续剪辑其他章节
    - 如果是，返回阶段 4（用户选择）
    - 如果否，结束 Skill
+
+---
+
+## 学习型短片模式（双遍学习）
+
+适用场景：制作 30-60 秒的“听力填空”学习短片，第一遍英文挖空字幕，第二遍完整双语字幕，末尾 summary 卡片。
+
+### 流程概览
+
+1. 运行 `prepare_learning_candidates.py` 在目标输出目录生成分析与候选产物（避免写到项目根目录）：
+   ```bash
+   python3 scripts/prepare_learning_candidates.py <subtitle.vtt> --output ./youtube-clips --name <base_name>
+   ```
+2. Claude 基于 `<output>/<base_name>/<video_id>_candidate_report.md` 给出 3-5 个 30-60s 候选片段
+3. 用户选择片段时间范围（或自动选第 1 名）
+4. 运行学习型短片脚本：
+   ```bash
+   python3 scripts/learning_clip.py <video.mp4> <subtitle.vtt|srt> <start_time> <end_time> --output <dir> --name <base_name>
+   ```
+5. 脚本输出：
+   - 原始片段、挖空字幕、完整字幕
+   - 第一遍视频、第二遍视频
+   - summary 卡片与最终拼接视频
+
+候选产物统一在 `<output>/<base_name>/` 下：
+- `<video_id>_analysis.json`
+- `<video_id>_candidates.json`
+- `<video_id>_candidate_report.md`
+
+### 关键子步骤
+
+1. **关键表达提取**：`extract_key_phrases.py` 输出 JSON（由 Claude 填充）
+2. **字幕挖空**：`mask_subtitles.py` 按关键词将英文字幕替换为 `MASK_TOKEN`
+3. **完整双语字幕**：复用 `translate_subtitles.py` 翻译流程
+4. **summary 卡片**：`render_summary_card.py` 生成纯色背景关键表达列表
+5. **拼接导出**：三段合并为最终 `_learning.mp4`
 
 ---
 

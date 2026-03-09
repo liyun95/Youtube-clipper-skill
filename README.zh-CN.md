@@ -18,6 +18,7 @@
 - **双语字幕** - 批量翻译字幕为中英双语，减少 95% 的 API 调用
 - **字幕烧录** - 将双语字幕硬编码到视频中，支持自定义样式
 - **内容总结** - 自动生成适合社交媒体的文案（小红书、抖音、微信公众号）
+- **学习型短片** - 双遍学习模式：英文挖空首遍 + 完整双语次遍 + summary 卡片
 
 ---
 
@@ -59,10 +60,19 @@ bash install_as_skill.sh
 
 ### Python 包
 
-安装脚本会自动安装以下包：
-- `yt-dlp` - YouTube 下载器
-- `pysrt` - SRT 字幕解析器
-- `python-dotenv` - 环境变量管理
+安装脚本会自动安装以下包（详见 [requirements.txt](requirements.txt)）：
+
+| 包名 | 版本 | 用途 |
+|------|------|------|
+| `yt-dlp` | >=2024.0.0 | YouTube 视频/字幕下载 |
+| `pysrt` | >=1.1.2 | SRT 字幕解析和处理 |
+| `python-dotenv` | >=1.0.0 | 环境变量管理 |
+| `chardet` | >=5.0.0 | 字符编码检测 |
+
+手动安装命令：
+```bash
+pip install -r requirements.txt
+```
 
 ### 重要：FFmpeg libass 支持
 
@@ -122,6 +132,82 @@ Clip this YouTube video: https://youtube.com/watch?v=VIDEO_ID
     └── 章节标题_summary.md           # 社交媒体文案
 ```
 
+### 学习型短片模式（5 段结构）
+
+生成 30-60s 学习短片，采用专为语言学习设计的 5 段结构：
+
+```
+┌─────────┐   ┌─────────┐   ┌────────────┐   ┌─────────────────┐   ┌─────────┐
+│  引导   │ → │  挖空   │ → │    过渡    │ → │  完整+下划线    │ → │ Summary │
+│  卡片   │   │  视频   │   │    卡片    │   │     视频        │   │  卡片   │
+│  (4秒)  │   │(30-60秒)│   │   (3秒)    │   │   (30-60秒)     │   │  (4秒)  │
+└─────────┘   └─────────┘   └────────────┘   └─────────────────┘   └─────────┘
+```
+
+**各段说明：**
+1. **引导卡片** - 显示关键表达的空白占位符，提示用户仔细听
+2. **挖空视频** - 第一遍，关键表达被替换为 `____`
+3. **过渡卡片** - 提示即将揭晓答案，关键表达将带下划线
+4. **完整视频** - 第二遍，完整双语字幕，关键表达带下划线标注
+5. **Summary 卡片** - 列出所有关键表达及其翻译
+
+```bash
+python scripts/learning_clip.py video.mp4 video.en.vtt 00:05:00 00:05:45 --output ./youtube-clips --name demo_clip
+```
+
+输出文件：
+```
+./youtube-clips/demo_clip/
+├── demo_clip_clip.mp4           # 原始片段
+├── demo_clip_clip.srt           # 原始字幕
+├── demo_clip_key_phrases.json   # 提取的关键表达
+├── demo_clip_masked.srt         # 挖空字幕（带 ____）
+├── demo_clip_bilingual.srt      # 双语字幕
+├── demo_clip_underlined.ass     # 带下划线的 ASS 字幕
+├── demo_clip_intro.mp4          # 引导卡片
+├── demo_clip_masked.mp4         # 第一遍视频
+├── demo_clip_transition.mp4     # 过渡卡片
+├── demo_clip_full.mp4           # 第二遍视频（下划线标注）
+├── demo_clip_summary.mp4        # Summary 卡片
+└── demo_clip_learning.mp4       # 最终拼接输出
+```
+
+**下划线格式（ASS）：**
+第二遍视频中的关键表达使用 ASS 下划线标签标注：
+```
+She had a {\u1}black belt{\u0} in small talk.
+```
+
+
+### Codex 工作流（无 API）
+
+**限制说明：** 没有 API key 时无法自动化语义分析。Codex 可以在对话中做语义分析，但这一步是人工流程。
+
+**为什么要提供 URL 或字幕文件：** Codex 需要时间戳来提出 3–5 个 30–60s 的候选片段。
+
+**选项 A：YouTube URL**
+1. 提供 URL 和学习目标（例如“听力填空”）。
+2. Codex 下载 MP4/VTT。
+3. Codex 先在本次输出目录下生成候选产物：
+   `python scripts/prepare_learning_candidates.py <subtitle.vtt> --output ./youtube-clips --name <base>`
+4. Codex 基于 `<output>/<base>/<video_id>_candidate_report.md` 给出 3–5 个候选片段（带排序）。
+5. 你选择其中一个片段（或自动选第 1 名）。
+6. Codex 运行：
+   `~/.codex/skills/learning-video-maker/scripts/learning_clip_guided.py <video.mp4> <subtitle.vtt|srt> <start> <end> --output <dir> --name <base>`
+
+**选项 B：本地 MP4 + VTT**
+1. 提供本地 `video.mp4` 和 `subtitle.vtt|srt` 路径，并说明学习目标。
+2. Codex 运行：
+   `python scripts/prepare_learning_candidates.py <subtitle.vtt> --output ./youtube-clips --name <base>`
+3. Codex 基于生成报告给出 3–5 个候选片段（带排序）。
+4. 你选择其中一个片段（或自动选第 1 名）。
+5. Codex 运行同一条引导脚本。
+
+候选产物统一保存在 `<output>/<base>/` 下（不会散落到项目根目录）：
+- `<video_id>_analysis.json`
+- `<video_id>_candidates.json`
+- `<video_id>_candidate_report.md`
+
 ---
 
 ## 配置
@@ -148,6 +234,53 @@ TARGET_LANGUAGE=中文
 
 # 目标章节时长（秒，推荐 180-300）
 TARGET_CHAPTER_DURATION=180
+```
+
+### 学习型短片设置
+
+```bash
+# 学习型短片时长（秒）
+LEARNING_CLIP_MIN_SEC=30
+LEARNING_CLIP_MAX_SEC=60
+LEARNING_CLIP_TARGET_SEC=45
+
+# 字幕挖空占位符
+MASK_TOKEN=____
+
+# 引导卡片（第一遍前的提示）
+INTRO_DURATION_SEC=4
+INTRO_TITLE_COLOR=#7AD7FF
+INTRO_SUBTITLE_COLOR=#FFFFFF
+INTRO_BLANK_COLOR=#FFD54F
+
+# 过渡卡片（第一遍和第二遍之间）
+TRANSITION_DURATION_SEC=3
+TRANSITION_TITLE_COLOR=#7AD7FF
+TRANSITION_SUBTITLE_COLOR=#FFFFFF
+
+# Summary 卡片（关键表达列表）
+SUMMARY_DURATION_SEC=4
+SUMMARY_TITLE_COLOR=#7AD7FF
+SUMMARY_EN_COLOR=#FFD54F
+SUMMARY_ZH_COLOR=#FFFFFF
+SUMMARY_INCLUDE_TRANSLATION=true
+```
+
+### 字幕样式
+
+```bash
+# 字体设置
+SUBTITLE_FONT_NAME=PingFang SC
+SUBTITLE_FONT_SIZE=24
+SUBTITLE_MARGIN_V=30
+SUBTITLE_OUTLINE=2
+SUBTITLE_SHADOW=1
+
+# 双语字幕配色
+BILINGUAL_COLOR=true
+BILINGUAL_ORDER=EN_FIRST
+SUBTITLE_EN_COLOR=#FFD54F
+SUBTITLE_ZH_COLOR=#FFFFFF
 ```
 
 完整配置选项请参见 [.env.example](.env.example)。
@@ -186,6 +319,15 @@ TARGET_CHAPTER_DURATION=180
 - 生成总结：是
 
 **结果**：可直接在社交媒体平台分享的高质量剪辑视频
+
+### 示例 3：制作双遍学习短片（30-60s）
+
+**输入**：
+```
+~/.codex/skills/learning-video-maker/scripts/learning_clip_guided.py video.mp4 video.en.vtt 00:12:10 00:12:55 --name vocab_boost
+```
+
+**结果**：英文挖空首遍 + 完整双语次遍 + summary 卡片，拼接成最终视频
 
 ---
 
